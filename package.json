@@ -1,0 +1,22 @@
+{
+  "name": "multifeed",
+  "version": "0.0.0",
+  "description": "Use multiple hypercore feeds as one feed.",
+  "main": "index.js",
+  "dependencies": {
+    "hypercore": "^6.5.2",
+    "hypercore-protocol": "^6.4.0",
+    "thunky": "^1.0.2"
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mafintosh/multifeed.git"
+  },
+  "author": "Mathias Buus (@mafintosh)",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/mafintosh/multifeed/issues"
+  },
+  "homepage": "https://github.com/mafintosh/multifeed"
+}
