@@ -191,6 +191,7 @@ MultiFeed.prototype.add = function (links, value, cb) {
     if (err) return cb(err)
 
     var node = {
+      type: 'node',
       links: links,
       value: value
     }
@@ -223,6 +224,7 @@ MultiFeed.prototype.append = function (value, cb) {
 }
 
 MultiFeed.prototype.update = function (cb) {
+  if (!cb) cb = noop
   var self = this
 
   this.ready(function (err) {
@@ -289,7 +291,7 @@ function getLinkedFeeds (feed, opts, cb) {
 
     if (head.type !== 'writers') {
       if (top === 0) return cb(null, [])
-      return feed.get(top - 1, onhead)
+      return feed.get(--top, onhead)
     }
 
     var keys = head.feeds.map(function (key) {
