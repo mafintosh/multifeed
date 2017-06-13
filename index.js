@@ -5,20 +5,29 @@ var raf = require('random-access-file')
 var protocol = require('hypercore-protocol')
 var inherits = require('inherits')
 var events = require('events')
+var toBuffer = require('to-buffer')
 
 module.exports = MultiFeed
 
-function MultiFeed (storage, key) {
-  if (!(this instanceof MultiFeed)) return new MultiFeed(storage, key)
+function MultiFeed (storage, key, opts) {
+  if (!(this instanceof MultiFeed)) return new MultiFeed(storage, key, opts)
+
+  if (isOptions(key)) {
+    opts = key
+    key = null
+  }
+  if (!opts) opts = {}
+
   events.EventEmitter.call(this)
 
   var self = this
 
   this.storage = typeof storage === 'string' ? fileStorage : storage
-  this.key = key || null
+  this.key = key ? toBuffer(key, 'hex') : null
   this.discoveryKey = null
+  this.sparse = opts.sparse
   this.source = null
-  this.me = null
+  this.local = null
   this.feeds = []
   this.ready = thunky(open)
   this.ready()
@@ -36,7 +45,10 @@ inherits(MultiFeed, events.EventEmitter)
 
 MultiFeed.prototype._createFeed = function (dir, key) {
   var self = this
-  var feed = hypercore(storage, key, {valueEncoding: 'json'})
+  var feed = hypercore(storage, key, {
+    valueEncoding: 'json', // TODO; use protobuf
+    sparse: this.sparse
+  })
 
   feed.on('append', function () {
     self.emit('append', feed)
@@ -62,11 +74,11 @@ MultiFeed.prototype._open = function (cb) {
     self.feeds.push(source)
     self.emit('add-feed', source)
 
-    if (source.writable) self.me = source
-    if (self.me) return onme()
+    if (source.writable) self.local = source
+    if (self.local) return onme()
 
-    self.me = self._createFeed('me')
-    self.me.ready(onme)
+    self.local = self._createFeed('local')
+    self.local.ready(onme)
   })
 
   function done () {
@@ -84,15 +96,21 @@ MultiFeed.prototype._open = function (cb) {
 
   function onme (err) {
     if (err) return cb(err)
-    self._updateFeeds(done)
+    if (self.local.length > 0) return update(null)
+    self.local.append({type: 'multifeed', version: 0}, update)
+  }
+
+  function update (err) {
+    if (err) return cb(err)
+    self._update({cached: true}, done)
   }
 }
 
 MultiFeed.prototype._addFeed = function (key) {
-  if (key.equals(this.me.key)) {
-    if (this.feeds.indexOf(this.me) > -1) return false
-    this.feeds.push(this.me)
-    this.emit('add-feed', this.me)
+  if (key.equals(this.local.key)) {
+    if (this.feeds.indexOf(this.local) > -1) return false
+    this.feeds.push(this.local)
+    this.emit('add-feed', this.local)
     return true
   }
 
@@ -131,14 +149,14 @@ MultiFeed.prototype.authorize = function (key, cb) {
 
     authorized.push(key.toString('hex'))
 
-    self.append({
+    self.local.append({
       type: 'writers',
       feeds: authorized
     }, onappend)
 
     function onappend (err) {
       if (err) return cb(err)
-      self._updateFeeds(cb)
+      self._update({cached: true}, cb)
     }
   })
 }
@@ -164,60 +182,63 @@ MultiFeed.prototype.replicate = function () {
   }
 }
 
-MultiFeed.prototype.heads = function (cb) {
-  var self = this
-
-  this._updateFeeds(function (err) {
-    if (err) return cb(err)
-
-    var error = null
-    var heads = []
-    var missing = self.feeds.length
-
-    for (var i = 0; i < self.feeds.length; i++) {
-      var feed = self.feeds[i]
-      var len = getLength(feed)
-
-      if (!len) {
-        missing--
-        continue
-      }
-
-      self.feeds[i].get(len - 1, onhead)
-    }
-
-    if (!missing) return cb(null, heads)
-
-    function onhead (err, node) {
-      if (err) error = err
-      if (node) heads.push(node)
-      if (--missing) return
-      if (error) return cb(error)
-      cb(null, heads)
-    }
-  })
-
-}
-
-MultiFeed.prototype.append = function (data, cb) {
+MultiFeed.prototype.add = function (links, value, cb) {
   if (!cb) cb = noop
 
   var self = this
 
   this.ready(function (err) {
     if (err) return cb(err)
-    self.me.append(data, cb)
+
+    var node = {
+      links: links,
+      value: value
+    }
+
+    self.local.append(node, cb)
   })
 }
 
-MultiFeed.prototype._updateFeeds = function (cb) {
+MultiFeed.prototype.append = function (value, cb) {
+  if (!cb) cb = noop
+
+  var self = this
+
+  this.ready(function (err) {
+    if (err) return cb(err)
+
+    var links = []
+    for (var i = 0; i < self.feeds.length; i++) {
+      var feed = self.feeds[i]
+      if (!feed.length || feed === self.local) continue
+
+      links.push({
+        key: feed.key.toString('hex'),
+        seq: feed.length - 1
+      })
+    }
+
+    self.add(links, value, cb)
+  })
+}
+
+MultiFeed.prototype.update = function (cb) {
+  var self = this
+
+  this.ready(function (err) {
+    if (err) return cb(err)
+    self._update(null, cb)
+  })
+}
+
+MultiFeed.prototype._update = function (opts, cb) {
   var self = this
   var missing = this.feeds.length
   var error = null
   var changed = false
 
   for (var i = 0; i < this.feeds.length; i++) {
-    getLinkedFeeds(this.feeds[i], onlinks)
+    getLinkedFeeds(this.feeds[i], opts, onlinks)
   }
 
   function onlinks (err, keys) {
@@ -231,7 +252,7 @@ MultiFeed.prototype._updateFeeds = function (cb) {
 
     if (--missing) return
     if (error) return cb(error)
-    if (changed) return self._updateFeeds(cb)
+    if (changed) return self._update(opts, cb)
     cb(null)
   }
 }
@@ -246,12 +267,22 @@ function getLength (feed) {
   return len
 }
 
-function getLinkedFeeds (feed, cb) {
-  var len = getLength(feed)
-  if (!len) return cb(null, [])
+function getLinkedFeeds (feed, opts, cb) {
+  var cached = !!(opts && opts.cached)
+  var len = cached ? feed.length : getLength(feed)
+
+  if (!len) {
+    if (!cached) return feed.update(retry)
+    return cb(null, [])
+  }
 
   var top = len - 1
   feed.get(top, onhead)
+
+  function retry (err) {
+    if (err) return cb(err)
+    getLinkedFeeds(feed, opts, cb)
+  }
 
   function onhead (err, head) {
     if (err) return cb(err)
@@ -270,3 +301,7 @@ function getLinkedFeeds (feed, cb) {
 }
 
 function noop () {}
+
+function isOptions (opts) {
+  return !!(opts && typeof opts !== 'string' && !Buffer.isBuffer(opts))
+}

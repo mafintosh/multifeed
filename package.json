@@ -6,7 +6,10 @@
   "dependencies": {
     "hypercore": "^6.5.2",
     "hypercore-protocol": "^6.4.0",
-    "thunky": "^1.0.2"
+    "inherits": "^2.0.3",
+    "random-access-file": "^1.8.1",
+    "thunky": "^1.0.2",
+    "to-buffer": "^1.1.0"
   },
   "devDependencies": {},
   "repository": {
